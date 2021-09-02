@@ -2,6 +2,8 @@ load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@bazel_skylib//lib:paths.bzl", "paths")
 
+load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "C_COMPILE_ACTION_NAME")
+
 load("//ocaml:providers.bzl",
      "AdjunctDepsProvider",
      "CompilationModeSettingProvider",
@@ -238,7 +240,62 @@ def impl_executable(ctx):
         includes.append(path)
 
     cc_toolchain = find_cpp_toolchain(ctx)
-    args.add("-cc", cc_toolchain.compiler_executable)
+    print("\n\t".join([
+        "\nCC_TOOLCHAIN:",
+        "cpu: {}".format(cc_toolchain.cpu),
+        "target_gnu_system_name: {}".format(
+            cc_toolchain.target_gnu_system_name),
+        "compiler: {}".format(cc_toolchain.compiler),
+        "compiler_executable: {}".format(cc_toolchain.compiler_executable),
+        "ar_executable: {}".format(cc_toolchain.ar_executable),
+        "gcov_executable: {}".format(
+            cc_toolchain.gcov_executable if hasattr(cc_toolchain, "gcov_executable") else "N/A"),
+        "ld_executable: {}".format(cc_toolchain.ld_executable),
+        "nm_executable: {}".format(cc_toolchain.nm_executable),
+        "objcopy_executable: {}".format(cc_toolchain.objcopy_executable),
+        "objdump_executable: {}".format(cc_toolchain.objdump_executable),
+        "preprocessor_executable: {}".format(cc_toolchain.preprocessor_executable),
+        "strip_executable: {}".format(cc_toolchain.strip_executable),
+        "",
+        "built_in_include_directories: {}".format(
+            cc_toolchain.built_in_include_directories),
+        "dynamic_runtime_lib: {}".format(
+            cc_toolchain.dynamic_runtime_lib),
+        "static_runtime_lib: {}".format(
+            cc_toolchain.static_runtime_lib),
+        "libc: {}".format(cc_toolchain.libc),
+        "needs_pic_for_dynamic_libraries: {}".format(
+            cc_toolchain.needs_pic_for_dynamic_libraries),
+        "sysroot: {}".format(cc_toolchain.sysroot),
+    ]))
+
+
+    print("in {}, the enabled features are {}".format(ctx.label.name, ctx.features))
+
+    ## https://github.com/bazelbuild/rules_cc/blob/main/examples/my_c_compile/my_c_compile.bzl
+    feature_configuration = cc_common.configure_features(
+        ctx = ctx,
+        cc_toolchain = cc_toolchain,
+        requested_features = ctx.features,
+        unsupported_features = ctx.disabled_features,
+    )
+    c_compiler_path = cc_common.get_tool_for_action(
+        feature_configuration = feature_configuration,
+        action_name = C_COMPILE_ACTION_NAME,
+    )
+    args.add("-cc", c_compiler_path)
+
+    ## NB: compact unwind is Apple-specific
+    ## https://stackoverflow.com/questions/41010010/whats-mean-about-compact-unwind-info-in-linker-synthesized
+    ## https://opensource.apple.com/source/libunwind/libunwind-35.3/include/mach-o/compact_unwind_encoding.h
+    args.add("-ccopt", "-Wl,-no_compact_unwind")
+
+    # print("c_compiler_path: %s" % c_compiler_path)
+    # includes.append(paths.dirname(c_compiler_path))
+
+    # if not macos:
+    #     args.add("-cc", cc_toolchain.compiler_executable)
+
     args.add_all(includes, before_each="-I")
 
     ## use depsets to get the right ordering. archive and module links are mutually exclusive.
@@ -260,7 +317,7 @@ def impl_executable(ctx):
     inputs_depset = depset(
         order = "postorder",
         direct = cclib_deps,
-        transitive = merged_depgraph_depsets + merged_archived_modules_depsets
+        transitive = merged_depgraph_depsets + merged_archived_modules_depsets + [cc_toolchain.all_files]
     )
 
     if ctx.attr._rule == "ocaml_executable":
